@@ -3,7 +3,7 @@ import Icon from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 type MatchStatus = 'completed' | 'live' | 'upcoming';
@@ -20,6 +20,7 @@ interface Match {
   league: string;
   division: string;
   minute?: number;
+  day: number;
 }
 
 interface TeamStats {
@@ -32,6 +33,14 @@ interface TeamStats {
   goalsAgainst: number;
   goalDiff: number;
   points: number;
+}
+
+interface PlayerStats {
+  name: string;
+  team: string;
+  goals: number;
+  assists: number;
+  matches: number;
 }
 
 const SCHEDULE = {
@@ -173,6 +182,12 @@ const SCHEDULE = {
   },
 };
 
+const PLAYER_NAMES = [
+  'Anderson', 'Silva', 'Martinez', 'Johnson', 'Williams', 'Brown', 'Garcia', 
+  'Rodriguez', 'Wilson', 'Moore', 'Taylor', 'Lee', 'Walker', 'Hall', 'Allen',
+  'Young', 'King', 'Wright', 'Lopez', 'Hill', 'Scott', 'Green', 'Adams'
+];
+
 const generateRandomScore = () => Math.floor(Math.random() * 5);
 
 const addMinutesToTime = (time: string, minutes: number): string => {
@@ -183,9 +198,9 @@ const addMinutesToTime = (time: string, minutes: number): string => {
   return `${newHours.toString().padStart(2, '0')}:${newMins.toString().padStart(2, '0')}`;
 };
 
-const generateMatches = (): Match[] => {
+const generateMatches = (day: number = 0): Match[] => {
   const matches: Match[] = [];
-  let id = 1;
+  let id = day * 1000 + 1;
   const now = new Date();
   const currentHour = now.getHours();
   const currentMinute = now.getMinutes();
@@ -202,11 +217,15 @@ const generateMatches = (): Match[] => {
         let status: MatchStatus = 'upcoming';
         let minute: number | undefined = undefined;
 
-        if (currentTotalMinutes >= endTotalMinutes) {
+        if (day === 0) {
+          if (currentTotalMinutes >= endTotalMinutes) {
+            status = 'completed';
+          } else if (currentTotalMinutes >= startTotalMinutes && currentTotalMinutes < endTotalMinutes) {
+            status = 'live';
+            minute = currentTotalMinutes - startTotalMinutes;
+          }
+        } else if (day < 0) {
           status = 'completed';
-        } else if (currentTotalMinutes >= startTotalMinutes && currentTotalMinutes < endTotalMinutes) {
-          status = 'live';
-          minute = currentTotalMinutes - startTotalMinutes;
         }
 
         matches.push({
@@ -221,6 +240,7 @@ const generateMatches = (): Match[] => {
           league,
           division,
           minute,
+          day,
         });
       });
     });
@@ -229,10 +249,35 @@ const generateMatches = (): Match[] => {
   return matches.sort((a, b) => a.startTime.localeCompare(b.startTime));
 };
 
+const generatePlayerStats = (matches: Match[]): PlayerStats[] => {
+  const players: PlayerStats[] = [];
+  const completedMatches = matches.filter(m => m.status === 'completed' && m.day <= 0);
+  
+  const allTeams = Array.from(new Set(completedMatches.flatMap(m => [m.homeTeam, m.awayTeam])));
+  
+  allTeams.forEach(team => {
+    const teamMatches = completedMatches.filter(m => m.homeTeam === team || m.awayTeam === team);
+    const playerCount = 3;
+    
+    for (let i = 0; i < playerCount; i++) {
+      players.push({
+        name: PLAYER_NAMES[Math.floor(Math.random() * PLAYER_NAMES.length)] + ' ' + 
+              (Math.floor(Math.random() * 99) + 1),
+        team,
+        goals: Math.floor(Math.random() * 8),
+        assists: Math.floor(Math.random() * 6),
+        matches: teamMatches.length,
+      });
+    }
+  });
+  
+  return players.sort((a, b) => b.goals - a.goals || b.assists - a.assists);
+};
+
 const calculateStats = (matches: Match[], league: string): TeamStats[] => {
   const statsMap = new Map<string, TeamStats>();
   
-  const leagueMatches = matches.filter(m => m.league === league && m.status === 'completed');
+  const leagueMatches = matches.filter(m => m.league === league && m.status === 'completed' && m.day <= 0);
   
   leagueMatches.forEach(match => {
     [match.homeTeam, match.awayTeam].forEach(team => {
@@ -285,38 +330,44 @@ const calculateStats = (matches: Match[], league: string): TeamStats[] => {
 };
 
 export default function Index() {
-  const [matches, setMatches] = useState<Match[]>(generateMatches());
-  const [activeSection, setActiveSection] = useState('main');
+  const [todayMatches] = useState<Match[]>(generateMatches(0));
+  const [tomorrowMatches] = useState<Match[]>(generateMatches(1));
+  const [allMatches, setAllMatches] = useState<Match[]>([...todayMatches, ...tomorrowMatches]);
+  const [activeSection, setActiveSection] = useState('live');
   const [selectedLeague, setSelectedLeague] = useState<string | 'all'>('all');
   const [activeTab, setActiveTab] = useState('all');
+  const [scheduleDay, setScheduleDay] = useState(0);
+
+  useEffect(() => {
+    setAllMatches([...todayMatches, ...tomorrowMatches]);
+  }, [todayMatches, tomorrowMatches]);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setMatches((prevMatches) =>
-        prevMatches.map((match) => {
-          if (match.status === 'live') {
-            const newMinute = (match.minute || 0) + 1;
-            if (newMinute >= 50) {
-              return {
-                ...match,
-                status: 'completed' as MatchStatus,
-                minute: undefined,
-              };
-            }
+      const updatedToday = todayMatches.map((match) => {
+        if (match.status === 'live') {
+          const newMinute = (match.minute || 0) + 1;
+          if (newMinute >= 50) {
             return {
               ...match,
-              homeScore: Math.random() > 0.97 ? match.homeScore + 1 : match.homeScore,
-              awayScore: Math.random() > 0.97 ? match.awayScore + 1 : match.awayScore,
-              minute: newMinute,
+              status: 'completed' as MatchStatus,
+              minute: undefined,
             };
           }
-          return match;
-        })
-      );
+          return {
+            ...match,
+            homeScore: Math.random() > 0.97 ? match.homeScore + 1 : match.homeScore,
+            awayScore: Math.random() > 0.97 ? match.awayScore + 1 : match.awayScore,
+            minute: newMinute,
+          };
+        }
+        return match;
+      });
+      setAllMatches([...updatedToday, ...tomorrowMatches]);
     }, 60000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [todayMatches, tomorrowMatches]);
 
   const renderMatch = (match: Match) => (
     <Card
@@ -363,9 +414,10 @@ export default function Index() {
     </Card>
   );
 
+  const currentMatches = allMatches.filter(m => m.day === 0);
   const filteredMatches = selectedLeague === 'all' 
-    ? matches 
-    : matches.filter(m => m.league === selectedLeague);
+    ? currentMatches
+    : currentMatches.filter(m => m.league === selectedLeague);
 
   const completedMatches = filteredMatches.filter((m) => m.status === 'completed');
   const liveMatches = filteredMatches.filter((m) => m.status === 'live');
@@ -383,11 +435,14 @@ export default function Index() {
         {Object.entries(SCHEDULE).map(([league, divisions]) => (
           <div key={league}>
             <h3 className="text-2xl font-bold font-['Montserrat'] mb-4 text-accent">{league}</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Под-дивизионы: A, B, C, D
+            </p>
             {Object.entries(divisions).map(([divName, games]) => {
               const teams = Array.from(new Set(games.flatMap(g => [g.home, g.away])));
               return (
                 <Card key={divName} className="p-4 mb-4 bg-card border-border">
-                  <h4 className="font-semibold text-lg mb-3">Дивизион {divName}</h4>
+                  <h4 className="font-semibold text-lg mb-3">{league}-{divName}</h4>
                   <div className="space-y-2">
                     {teams.map((team, idx) => (
                       <div key={idx} className="flex items-center gap-2 text-sm">
@@ -406,10 +461,44 @@ export default function Index() {
   };
 
   const renderStatsContent = () => {
+    const playerStats = generatePlayerStats(allMatches);
+    
     return (
       <div className="space-y-8">
+        <div>
+          <h3 className="text-2xl font-bold font-['Montserrat'] mb-4 text-accent">
+            Лучшие бомбардиры
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left p-3 text-sm font-semibold">#</th>
+                  <th className="text-left p-3 text-sm font-semibold">Игрок</th>
+                  <th className="text-left p-3 text-sm font-semibold">Команда</th>
+                  <th className="text-center p-3 text-sm font-semibold">Матчи</th>
+                  <th className="text-center p-3 text-sm font-semibold bg-accent/10">Голы</th>
+                  <th className="text-center p-3 text-sm font-semibold">Передачи</th>
+                </tr>
+              </thead>
+              <tbody>
+                {playerStats.slice(0, 20).map((player, idx) => (
+                  <tr key={idx} className="border-b border-border/50 hover:bg-muted/30">
+                    <td className="p-3 text-sm text-muted-foreground">{idx + 1}</td>
+                    <td className="p-3 text-sm font-medium">{player.name}</td>
+                    <td className="p-3 text-sm text-muted-foreground">{player.team}</td>
+                    <td className="p-3 text-sm text-center">{player.matches}</td>
+                    <td className="p-3 text-sm text-center font-bold bg-accent/10">{player.goals}</td>
+                    <td className="p-3 text-sm text-center">{player.assists}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         {['Север', 'Восток', 'Юг', 'Запад'].map(league => {
-          const stats = calculateStats(matches, league);
+          const stats = calculateStats(allMatches, league);
           return (
             <div key={league}>
               <h3 className="text-2xl font-bold font-['Montserrat'] mb-4 text-accent">
@@ -456,38 +545,91 @@ export default function Index() {
     );
   };
 
+  const renderScheduleContent = () => {
+    const scheduleMatches = scheduleDay === 0 ? todayMatches : tomorrowMatches;
+    const dayLabel = scheduleDay === 0 ? 'Сегодня' : 'Завтра';
+    
+    return (
+      <div>
+        <div className="flex items-center gap-4 mb-6">
+          <Button
+            variant={scheduleDay === 0 ? 'default' : 'outline'}
+            onClick={() => setScheduleDay(0)}
+          >
+            Сегодня
+          </Button>
+          <Button
+            variant={scheduleDay === 1 ? 'default' : 'outline'}
+            onClick={() => setScheduleDay(1)}
+          >
+            Завтра
+          </Button>
+        </div>
+
+        <h3 className="text-2xl font-bold font-['Montserrat'] mb-6">{dayLabel}</h3>
+
+        {['Север', 'Восток', 'Юг', 'Запад'].map(league => {
+          const leagueMatches = scheduleMatches.filter(m => m.league === league);
+          const groupedByDiv = leagueMatches.reduce((acc, match) => {
+            const key = `${match.league}-${match.division}`;
+            if (!acc[key]) acc[key] = [];
+            acc[key].push(match);
+            return acc;
+          }, {} as Record<string, Match[]>);
+
+          return (
+            <div key={league} className="mb-8">
+              <h4 className="text-xl font-bold font-['Montserrat'] mb-4 text-accent">{league}</h4>
+              {Object.entries(groupedByDiv).map(([divKey, matches]) => (
+                <div key={divKey} className="mb-6">
+                  <h5 className="font-semibold text-lg mb-3">{divKey}</h5>
+                  <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {matches.map(renderMatch)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <nav className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 bg-accent rounded flex items-center justify-center">
-                <Icon name="Trophy" className="text-accent-foreground" size={24} />
+              <div className="w-12 h-12 bg-accent rounded-lg flex items-center justify-center">
+                <span className="text-accent-foreground font-bold text-lg font-['Montserrat']">IIFL</span>
               </div>
               <div>
-                <h1 className="text-2xl font-bold font-['Montserrat'] tracking-tight">IIFL</h1>
-                <p className="text-xs text-muted-foreground">96 матчей • 4 лиги • 16 дивизионов</p>
+                <h1 className="text-lg font-bold font-['Montserrat'] tracking-tight leading-tight">
+                  Interregional Independent<br />Football League
+                </h1>
+                <p className="text-xs text-muted-foreground">96 матчей • 4 лиги • 64 команды</p>
               </div>
             </div>
 
             <div className="hidden md:flex items-center space-x-1">
-              {['main', 'schedule', 'divisions', 'stats', 'news', 'live'].map((section) => {
+              {['live', 'main', 'schedule', 'divisions', 'stats', 'news'].map((section) => {
                 const labels = {
+                  live: 'Лайв',
                   main: 'Главная',
                   schedule: 'Расписание',
                   divisions: 'Дивизоны',
                   stats: 'Статистика',
                   news: 'Новости',
-                  live: 'Лайв',
                 };
                 return (
                   <Button
                     key={section}
                     variant={activeSection === section ? 'default' : 'ghost'}
-                    className="font-medium"
+                    className={section === 'live' && activeSection !== 'live' ? 'text-red-500 hover:text-red-600' : 'font-medium'}
                     onClick={() => setActiveSection(section)}
                   >
+                    {section === 'live' && <Icon name="Radio" size={16} className="mr-2" />}
                     {labels[section as keyof typeof labels]}
                   </Button>
                 );
@@ -504,13 +646,13 @@ export default function Index() {
       <div className="relative h-[250px] bg-gradient-to-br from-accent/20 via-background to-background border-b border-border">
         <div className="container mx-auto px-6 h-full flex flex-col justify-center">
           <h2 className="text-4xl md:text-5xl font-bold font-['Montserrat'] mb-3 tracking-tight">
-            Международная Футбольная Лига
+            Interregional Independent Football League
           </h2>
           <p className="text-lg text-muted-foreground max-w-2xl font-light">
             Круглосуточный профессиональный футбол • 96 матчей в день • 50 минут каждый
           </p>
           <div className="flex gap-3 mt-4">
-            <Badge className="bg-accent/20 text-accent border-accent/30">
+            <Badge className="bg-red-600 text-white">
               <Icon name="Radio" size={14} className="mr-1" />
               {liveMatches.length} лайв
             </Badge>
@@ -527,6 +669,26 @@ export default function Index() {
       </div>
 
       <div className="container mx-auto px-6 py-8">
+        {activeSection === 'live' && (
+          <>
+            <h2 className="text-3xl font-bold font-['Montserrat'] mb-6 flex items-center gap-3">
+              <div className="w-3 h-3 bg-red-600 rounded-full animate-pulse"></div>
+              Матчи в прямом эфире
+            </h2>
+            {liveMatches.length > 0 ? (
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {liveMatches.map(renderMatch)}
+              </div>
+            ) : (
+              <div className="text-center py-20">
+                <Icon name="Clock" size={48} className="mx-auto mb-4 text-muted-foreground" />
+                <h3 className="text-2xl font-bold font-['Montserrat'] mb-2">Нет активных матчей</h3>
+                <p className="text-muted-foreground">Следующие матчи начнутся в ближайшее время</p>
+              </div>
+            )}
+          </>
+        )}
+
         {activeSection === 'main' && (
           <>
             <div className="flex flex-col md:flex-row gap-4 mb-6">
@@ -571,9 +733,11 @@ export default function Index() {
           </>
         )}
 
+        {activeSection === 'schedule' && renderScheduleContent()}
+
         {activeSection === 'divisions' && (
           <div>
-            <h2 className="text-3xl font-bold font-['Montserrat'] mb-6">Дивизионы</h2>
+            <h2 className="text-3xl font-bold font-['Montserrat'] mb-6">Дивизоны</h2>
             {renderDivisionsContent()}
           </div>
         )}
@@ -585,11 +749,11 @@ export default function Index() {
           </div>
         )}
 
-        {(activeSection === 'schedule' || activeSection === 'news' || activeSection === 'live') && (
+        {activeSection === 'news' && (
           <div className="text-center py-20">
-            <Icon name="Construction" size={48} className="mx-auto mb-4 text-muted-foreground" />
+            <Icon name="Newspaper" size={48} className="mx-auto mb-4 text-muted-foreground" />
             <h3 className="text-2xl font-bold font-['Montserrat'] mb-2">Раздел в разработке</h3>
-            <p className="text-muted-foreground">Скоро здесь появится контент</p>
+            <p className="text-muted-foreground">Скоро здесь появятся новости</p>
           </div>
         )}
       </div>
@@ -599,12 +763,12 @@ export default function Index() {
           <div className="flex flex-col md:flex-row items-center justify-between">
             <div className="flex items-center space-x-3 mb-4 md:mb-0">
               <div className="w-8 h-8 bg-accent rounded flex items-center justify-center">
-                <Icon name="Trophy" className="text-accent-foreground" size={20} />
+                <span className="text-accent-foreground font-bold text-sm">IIFL</span>
               </div>
-              <span className="font-bold font-['Montserrat']">IIFL</span>
+              <span className="font-bold font-['Montserrat'] text-sm">Interregional Independent Football League</span>
             </div>
             <p className="text-sm text-muted-foreground">
-              © 2026 Международная Футбольная Лига. Все права защищены.
+              © 2026 IIFL. Все права защищены.
             </p>
           </div>
         </div>
